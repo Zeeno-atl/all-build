@@ -1,0 +1,19 @@
+version: '3.9'
+
+volumes:
+  system-memory:
+
+services:
+  task-database:
+    image: redis:latest
+    ports:
+      - 6379:6379
+
+  task-viewer:
+    image: hibiken/asynqmon:latest
+    environment:
+      - REDIS_URL=redis://task-database:6379
+    ports:
+      - 8081:8080
+    depends_on:
+      - task-database
