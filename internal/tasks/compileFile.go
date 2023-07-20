@@ -98,27 +98,50 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 		return fmt.Errorf("could not find tool: %s", p.Tag)
 	}
 
+	log.Printf("found tool: %s %s", tool.Tag, tool.Executable)
+
 	// TODO: write files to disk
 	// TODO: remap all files to the new path
 
+	log.Printf("running command: %s %s", tool.Executable, p.Command)
 	cmd := exec.Command(tool.Executable, p.Command...)
 	//command.Env = append(os.Environ(), p.Environment...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		log.Printf("could not get stderr pipe: %v", err)
 		return fmt.Errorf("could not get stderr pipe: %v", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		log.Printf("could not get stdout pipe: %v", err)
 		return fmt.Errorf("could not get stdout pipe: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("could not start command: %v", err)
+		log.Printf("could not start command, probably due to the misconfiguration of the executor: %v", err)
+
+		responsePayload, err := json.Marshal(Response{
+			ReturnCode: -1,
+			Stdout:     "",
+			Stderr:     fmt.Sprintf("could not start command: %v", err),
+			Files:      make([]File, 0),
+		})
+		if err != nil {
+			return err
+		}
+
+		t.ResultWriter().Write(responsePayload)
+		return nil
 	}
 
 	errout, _ := io.ReadAll(stderr)
 	out, _ := io.ReadAll(stdout)
+
+	log.Printf("stderr: %s", errout)
+	log.Printf("stdout: %s", out)
+
+	cmd.Wait()
 
 	reponse := Response{
 		ReturnCode: cmd.ProcessState.ExitCode(),
@@ -133,6 +156,5 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 
 	t.ResultWriter().Write(payload)
 
-	cmd.Wait()
 	return nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -15,9 +16,6 @@ const (
 )
 
 func main() {
-	log.Printf("buildall compiler version %s", Version)
-	fmt.Println(len(os.Args), os.Args)
-
 	config, err := LoadConfig()
 	if err != nil {
 		log.Fatalln("Error loading configuration:", err)
@@ -46,7 +44,16 @@ func main() {
 			break
 		}
 		if status.State == asynq.TaskStateCompleted {
-			log.Printf("task (%s) succeeded with output: %q", info.ID, status.Result)
+			var result tasks.Response
+			err := json.Unmarshal([]byte(status.Result), &result)
+			if err != nil {
+				log.Fatalf("could not unmarshal result: %v", err)
+			}
+
+			fmt.Fprint(os.Stderr, result.Stderr)
+			fmt.Fprint(os.Stdout, result.Stdout)
+			os.Exit(result.ReturnCode)
+
 			break
 		}
 
