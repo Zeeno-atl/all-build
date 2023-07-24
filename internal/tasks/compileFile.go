@@ -157,6 +157,21 @@ func NewCompileFileHandler(tools []executor.Tool) *CompileFileHandler {
 	return &CompileFileHandler{Tools: tools}
 }
 
+func respondError(t *asynq.Task, err error) error {
+	responsePayload, err := json.Marshal(Response{
+		ReturnCode: -1,
+		Stdout:     "",
+		Stderr:     fmt.Sprintf("%v", err),
+		Files:      make([]File, 0),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	t.ResultWriter().Write(responsePayload)
+	return nil
+}
+
 func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	var p CompileFile
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
@@ -165,7 +180,7 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 
 	tool, ok := utils.Find(h.Tools, func(tool executor.Tool) bool { return tool.Tag == p.Tag })
 	if !ok {
-		return fmt.Errorf("could not find tool: %s", p.Tag)
+		return respondError(t, fmt.Errorf("could not find tool: %s", p.Tag))
 	}
 
 	log.Printf("found tool: %s %s", tool.Tag, tool.Executable)
@@ -174,14 +189,12 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 	randomDirectory, err := os.MkdirTemp("", "all-build-*")
 	log.Printf("created temporary directory: %s", randomDirectory)
 	if err != nil {
-		log.Printf("could not create temporary directory: %v", err)
-		return fmt.Errorf("could not create temporary directory: %v", err)
+		return respondError(t, fmt.Errorf("could not create temporary directory: %v", err))
 	}
 
 	for _, file := range p.Inputs {
 		if err := os.WriteFile(filepath.Join(randomDirectory, file.Path), file.Content, 0644); err != nil {
-			log.Printf("could not write file: %v", err)
-			return fmt.Errorf("could not write file: %v", err)
+			return respondError(t, fmt.Errorf("could not write file: %v", err))
 		}
 	}
 	// TODO: remap all files to the new path
@@ -193,31 +206,16 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 	//command.Env = append(os.Environ(), p.Environment...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		log.Printf("could not get stderr pipe: %v", err)
-		return fmt.Errorf("could not get stderr pipe: %v", err)
+		return respondError(t, fmt.Errorf("could not get stderr pipe: %v", err))
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("could not get stdout pipe: %v", err)
-		return fmt.Errorf("could not get stdout pipe: %v", err)
+		return respondError(t, fmt.Errorf("could not get stdout pipe: %v", err))
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("could not start command, probably due to the misconfiguration of the executor: %v", err)
-
-		responsePayload, err := json.Marshal(Response{
-			ReturnCode: -1,
-			Stdout:     "",
-			Stderr:     fmt.Sprintf("could not start command: %v", err),
-			Files:      make([]File, 0),
-		})
-		if err != nil {
-			return err
-		}
-
-		t.ResultWriter().Write(responsePayload)
-		return nil
+		return respondError(t, fmt.Errorf("could not start command: %v", err))
 	}
 
 	errout, _ := io.ReadAll(stderr)
@@ -233,7 +231,7 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 		content, err := os.ReadFile(filepath.Join(randomDirectory, output))
 		if err != nil {
 			log.Printf("could not read output file: %v", err)
-			return fmt.Errorf("could not read output file: %v", err)
+			continue
 		}
 
 		outFiles = append(outFiles, File{
