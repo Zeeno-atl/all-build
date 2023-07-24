@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/Zeeno-atl/all-build/internal/compiler"
+	"github.com/Zeeno-atl/all-build/internal/executor"
 	"github.com/golang/glog"
 	"gopkg.in/yaml.v3"
 )
@@ -15,7 +15,7 @@ import (
 type Config struct {
 	TaskDatabase *string         `yaml:"task-database"`
 	Concurrency  *int            `yaml:"concurrency"`
-	Tools        []compiler.Tool `yaml:"tools"`
+	Tools        []executor.Tool `yaml:"tools"`
 }
 
 func toType[T any](value string) T {

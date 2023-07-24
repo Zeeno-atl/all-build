@@ -1,4 +1,4 @@
-package compiler
+package executor
 
 type Tool struct {
 	Executable string `yaml:"executable"`

@@ -52,9 +52,15 @@ func main() {
 
 			fmt.Fprint(os.Stderr, result.Stderr)
 			fmt.Fprint(os.Stdout, result.Stdout)
-			os.Exit(result.ReturnCode)
 
-			break
+			for _, file := range result.Files {
+				err = os.WriteFile(file.Path, file.Content, 0644)
+				if err != nil {
+					log.Printf("could not write file: %v", err)
+				}
+			}
+
+			os.Exit(result.ReturnCode)
 		}
 
 		time.Sleep(10 * time.Millisecond)

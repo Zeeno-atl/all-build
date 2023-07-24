@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/golang/glog"
@@ -59,7 +60,13 @@ func loadValue[T any](config **T, name string, description string, value T) {
 func LoadConfig() (Config, error) {
 	var config Config
 
-	filenames := []string{"compiler.yaml", "configs/compiler.yaml"}
+	exePath, err := os.Executable()
+	if err != nil {
+		return config, fmt.Errorf("failed to get executable path: %v", err)
+	}
+	exeDir := filepath.Dir(exePath)
+
+	filenames := []string{"compiler.yaml", filepath.Join(exeDir, "compiler.yaml"), "configs/compiler.yaml"}
 
 	for _, filename := range filenames {
 		// Read the YAML configuration file
