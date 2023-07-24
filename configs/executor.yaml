@@ -1,3 +1,3 @@
 tools:
   - tag: gcc-12.2.0
-    executable: gcc
+    executable: g++

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Zeeno-atl/all-build/internal/executor"
 	"github.com/Zeeno-atl/all-build/internal/utils"
+	"github.com/Zeeno-atl/all-build/pkg/compiler"
 	"github.com/hibiken/asynq"
 )
 
@@ -24,80 +25,7 @@ type CompileFile struct {
 	Environment []string `json:"environment"`
 }
 
-func getIncludePaths(commands []string) []string {
-
-	const (
-		StateParsing = iota
-		StateInclude
-	)
-
-	state := StateParsing
-
-	ret := make([]string, 0)
-
-	for _, cmd := range commands {
-
-		if state == StateInclude {
-			state = StateParsing
-			ret = append(ret, cmd)
-			continue
-		}
-
-		if cmd == "-I" || cmd == "/I" {
-			state = StateInclude
-			continue
-		}
-		if strings.HasPrefix(cmd, "-I") || strings.HasPrefix(cmd, "/I") {
-			ret = append(ret, cmd[2:])
-			continue
-		}
-		if strings.HasPrefix(cmd, "-external:I") || strings.HasPrefix(cmd, "/external:I") {
-			ret = append(ret, cmd[11:])
-			continue
-		}
-		if strings.HasPrefix(cmd, "-imsvc") || strings.HasPrefix(cmd, "/imsvc") {
-			ret = append(ret, cmd[6:])
-			continue
-		}
-	}
-
-	return ret
-}
-
-func getInputFiles(commands []string) []string {
-	// This works primarily for MSVC as no argument is passed without flag character (- or /) except input files
-	ret := make([]string, 0)
-	for _, cmd := range commands {
-		if !strings.HasPrefix(cmd, "-") && !strings.HasPrefix(cmd, "/") {
-			ret = append(ret, cmd)
-		}
-	}
-	return ret
-}
-
-func getOutputFiles(commands []string) []string {
-	ret := make([]string, 0)
-	for _, cmd := range commands {
-		if strings.HasPrefix(cmd, "-Fo") || strings.HasPrefix(cmd, "/Fo") {
-			ret = append(ret, cmd[3:])
-		}
-	}
-
-	if len(ret) == 0 {
-		suffix := ".exe"
-		if utils.Contains(commands, "-c") || utils.Contains(commands, "/c") {
-			suffix = ".obj"
-		}
-		inputNames := getInputFiles(commands)
-		ret = utils.Map(inputNames, func(name string) string {
-			return strings.TrimSuffix(name, filepath.Ext(name)) + suffix
-		})
-	}
-
-	return ret
-}
-
-func walkDirectory(path string) []string {
+func walkFilesystem(path string) []string {
 	files := make([]string, 0)
 	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if info != nil && !info.IsDir() {
@@ -108,36 +36,50 @@ func walkDirectory(path string) []string {
 	return files
 }
 
-func NewCompileFile(args []string, tag string) (*asynq.Task, error) {
-	filePaths := []string{}
-	folders := getIncludePaths(args)
-	folders = utils.Unique(folders)
+func NewCompileFile(args []string, tag string, compilerType string) (*asynq.Task, error) {
+	compiler := compiler.NewCompiler(compilerType)
 
-	for _, folder := range folders {
-		filePaths = append(filePaths, walkDirectory(folder)...)
+	if compiler == nil {
+		return nil, fmt.Errorf("unknown compiler: %s", compilerType)
 	}
 
-	filePaths = append(filePaths, getInputFiles(args)...)
-	filePaths = utils.Unique(filePaths)
+	compiler.Parse(args)
 
-	files := utils.Map(filePaths, func(path string) File {
+	inputs := compiler.GetInputs()
+	inputs = utils.Unique(inputs)
+
+	filePaths := make([]string, 0)
+
+	for _, input := range inputs {
+		filePaths = append(filePaths, walkFilesystem(input)...)
+	}
+
+	inputFiles := utils.Map(filePaths, func(path string) File {
 		content, err := os.ReadFile(path)
 
 		if err != nil {
 			log.Fatalf("could not read file: %v", err)
 		}
 
+		info, err := os.Stat(path)
+		if err != nil {
+			log.Fatalf("could not get file info: %v", err)
+		}
+
 		return File{
 			Path:    path,
 			Content: content,
+			Chmod:   int(info.Mode().Perm()),
 		}
 	})
+
+	outputs := compiler.GetOutputs()
 
 	cf := CompileFile{
 		Tag:         tag,
 		Command:     args,
-		Inputs:      files,
-		Outputs:     getOutputFiles(args),
+		Inputs:      inputFiles,
+		Outputs:     outputs,
 		Environment: make([]string, 0),
 	}
 
@@ -158,6 +100,7 @@ func NewCompileFileHandler(tools []executor.Tool) *CompileFileHandler {
 }
 
 func respondError(t *asynq.Task, err error) error {
+	log.Printf("error: %v", err)
 	responsePayload, err := json.Marshal(Response{
 		ReturnCode: -1,
 		Stdout:     "",
@@ -184,7 +127,7 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 	}
 
 	log.Printf("found tool: %s %s", tool.Tag, tool.Executable)
-	log.Printf("files: %v", p.Inputs)
+	log.Printf("files: ['%s']", strings.Join(utils.Map(p.Inputs, func(file File) string { return file.Path }), "', '"))
 
 	randomDirectory, err := os.MkdirTemp("", "all-build-*")
 	log.Printf("created temporary directory: %s", randomDirectory)
@@ -193,10 +136,28 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 	}
 
 	for _, file := range p.Inputs {
-		if err := os.WriteFile(filepath.Join(randomDirectory, file.Path), file.Content, 0644); err != nil {
+		filePath := filepath.Join(randomDirectory, file.Path)
+
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return respondError(t, fmt.Errorf("could not create directory: %v", err))
+		}
+
+		if err := os.WriteFile(filePath, file.Content, 0644); err != nil {
 			return respondError(t, fmt.Errorf("could not write file: %v", err))
 		}
+
+		if err := os.Chmod(filePath, os.FileMode(file.Chmod)); err != nil {
+			return respondError(t, fmt.Errorf("could not chmod file: %v", err))
+		}
 	}
+
+	// Create output directories
+	for _, output := range p.Outputs {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(randomDirectory, output)), 0755); err != nil {
+			return respondError(t, fmt.Errorf("could not create directory: %v", err))
+		}
+	}
+
 	// TODO: remap all files to the new path
 
 	log.Printf("running command: %s %s", tool.Executable, p.Command)
@@ -234,9 +195,16 @@ func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) erro
 			continue
 		}
 
+		info, err := os.Stat(filepath.Join(randomDirectory, output))
+		if err != nil {
+			log.Printf("could not get file info: %v", err)
+			continue
+		}
+
 		outFiles = append(outFiles, File{
 			Path:    output,
 			Content: content,
+			Chmod:   int(info.Mode().Perm()),
 		})
 	}
 

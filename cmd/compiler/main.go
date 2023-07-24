@@ -24,7 +24,7 @@ func main() {
 	client := asynq.NewClient(asynq.RedisClientOpt{Addr: *config.TaskDatabase})
 	defer client.Close()
 
-	task, err := tasks.NewCompileFile(os.Args[1:], config.Tag)
+	task, err := tasks.NewCompileFile(os.Args[1:], config.Tag, config.CompilerType)
 	if err != nil {
 		log.Fatalf("could not create task: %v", err)
 	}
@@ -57,6 +57,11 @@ func main() {
 				err = os.WriteFile(file.Path, file.Content, 0644)
 				if err != nil {
 					log.Printf("could not write file: %v", err)
+				}
+
+				err = os.Chmod(file.Path, os.FileMode(file.Chmod))
+				if err != nil {
+					log.Printf("could not chmod file: %v", err)
 				}
 			}
 

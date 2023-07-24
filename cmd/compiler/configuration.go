@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golang/glog"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
 	TaskDatabase *string `yaml:"task-database"`
 	Tag          string  `yaml:"tag"`
+	CompilerType string  `yaml:"compiler"`
 }
 
 func toType[T any](value string) T {
@@ -72,7 +72,6 @@ func LoadConfig() (Config, error) {
 		// Read the YAML configuration file
 		data, err := os.ReadFile(filename)
 		if err == nil {
-			glog.V(1).Infof("Loading configuration from %s", filename)
 			err = yaml.Unmarshal(data, &config)
 			if err != nil {
 				return config, fmt.Errorf("failed to parse YAML data: %v", err)

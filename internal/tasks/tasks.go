@@ -7,6 +7,7 @@ const (
 
 type File struct {
 	Path    string `json:"path"`
+	Chmod   int    `json:"chmod"`
 	Content []byte `json:"content"`
 }
 
