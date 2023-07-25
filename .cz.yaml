@@ -9,7 +9,6 @@ commitizen:
   version: 0.0.1
   version_type: semver
   version_files:
-    - "cmd/server/main.go:Version"
+    - "cmd/compiler/main.go:Version"
     - "cmd/executor/main.go:Version"
-    - "cmd/server/main.go:Version"
-    
+
