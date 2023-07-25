@@ -1,14 +1,13 @@
 ---
 commitizen:
+  changelog_incremental: false
+  changelog_merge_prerelease: true
   major_version_zero: true
   name: cz_conventional_commits
   tag_format: v$version
-  update_changelog_on_bump: true
-  changelog_incremental: true
-  changelog_merge_prerelease: true
-  version: 0.0.1
-  version_type: semver
+  update_changelog_on_bump: false
+  version: 0.1.0
   version_files:
-    - "cmd/compiler/main.go:Version"
-    - "cmd/executor/main.go:Version"
-
+  - cmd/compiler/main.go:Version
+  - cmd/executor/main.go:Version
+  version_type: semver
