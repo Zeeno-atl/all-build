@@ -1,3 +1,9 @@
+## v0.2.0 (2023-08-13)
+
+### Feat
+
+- chrooting, so the executor can run in parallel in containers
+
 ## v0.1.0 (2023-07-25)
 
 ### Feat
