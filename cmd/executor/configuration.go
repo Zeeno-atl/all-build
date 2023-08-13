@@ -62,7 +62,7 @@ func loadValue[T any](config **T, name string, description string, value T) {
 func LoadConfig() (Config, error) {
 	var config Config
 
-	filenames := []string{"executor.yaml", "configs/executor.yaml"}
+	filenames := []string{"executor.yaml", "configs/executor.yaml", "/etc/all-build/executor.yaml"}
 
 	for _, filename := range filenames {
 		// Read the YAML configuration file

@@ -17,3 +17,12 @@ services:
       - 8081:8080
     depends_on:
       - task-database
+  
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - task-database
+    volumes:
+      - /media/zeeno/data/Projects/all-build/bin/executor:/usr/bin/executor

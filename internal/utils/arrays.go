@@ -1,5 +1,7 @@
 package utils
 
+import "strings"
+
 func Map[T, U any](ts []T, f func(T) U) []U {
 	us := make([]U, len(ts))
 	for i := range ts {
@@ -46,4 +48,22 @@ func Contains[T comparable](ss []T, s T) bool {
 		}
 	}
 	return false
+}
+
+func ContainsIf[T any](ss []T, test func(T) bool) bool {
+	for _, x := range ss {
+		if test(x) {
+			return true
+		}
+	}
+	return false
+}
+
+func Prefix(s string, prefixes []string) (string, bool) {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return prefix, true
+		}
+	}
+	return s, false
 }

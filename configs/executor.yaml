@@ -1,3 +1,4 @@
 tools:
-  - tag: gcc-12.2.0
+  - tag: gcc-12
     executable: g++
+task-database: task-database:6379

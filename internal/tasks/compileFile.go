@@ -14,6 +14,7 @@ import (
 	"github.com/Zeeno-atl/all-build/internal/executor"
 	"github.com/Zeeno-atl/all-build/internal/utils"
 	"github.com/Zeeno-atl/all-build/pkg/compiler"
+	"github.com/golang/glog"
 	"github.com/hibiken/asynq"
 )
 
@@ -23,6 +24,7 @@ type CompileFile struct {
 	Inputs      []File   `json:"inputs"`
 	Outputs     []string `json:"outputs"`
 	Environment []string `json:"environment"`
+	Compiler    string   `json:"compiler"`
 }
 
 func walkFilesystem(path string) []string {
@@ -37,22 +39,24 @@ func walkFilesystem(path string) []string {
 }
 
 func NewCompileFile(args []string, tag string, compilerType string) (*asynq.Task, error) {
-	compiler := compiler.NewCompiler(compilerType)
+	compilerInstance := compiler.NewCompiler(compilerType)
 
-	if compiler == nil {
+	if compilerInstance == nil {
 		return nil, fmt.Errorf("unknown compiler: %s", compilerType)
 	}
 
-	compiler.Parse(args)
+	compilerInstance.Parse(args)
 
-	inputs := compiler.GetInputs()
+	inputs := compiler.GetInputs(compilerInstance)
 	inputs = utils.Unique(inputs)
 
 	filePaths := make([]string, 0)
 
 	for _, input := range inputs {
-		filePaths = append(filePaths, walkFilesystem(input)...)
+		baseDir := filepath.Dir(input)
+		filePaths = append(filePaths, walkFilesystem(baseDir)...)
 	}
+	filePaths = utils.Unique(filePaths)
 
 	inputFiles := utils.Map(filePaths, func(path string) File {
 		content, err := os.ReadFile(path)
@@ -73,7 +77,7 @@ func NewCompileFile(args []string, tag string, compilerType string) (*asynq.Task
 		}
 	})
 
-	outputs := compiler.GetOutputs()
+	outputs := compiler.GetOutputs(compilerInstance)
 
 	cf := CompileFile{
 		Tag:         tag,
@@ -81,6 +85,7 @@ func NewCompileFile(args []string, tag string, compilerType string) (*asynq.Task
 		Inputs:      inputFiles,
 		Outputs:     outputs,
 		Environment: make([]string, 0),
+		Compiler:    compilerType,
 	}
 
 	payload, err := json.Marshal(cf)
@@ -100,7 +105,7 @@ func NewCompileFileHandler(tools []executor.Tool) *CompileFileHandler {
 }
 
 func respondError(t *asynq.Task, err error) error {
-	log.Printf("error: %v", err)
+	glog.Errorf("error: %v", err)
 	responsePayload, err := json.Marshal(Response{
 		ReturnCode: -1,
 		Stdout:     "",
@@ -118,86 +123,107 @@ func respondError(t *asynq.Task, err error) error {
 func (h CompileFileHandler) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	var p CompileFile
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
-		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("%s: json.Unmarshal failed: %v: %w", t.ResultWriter().TaskID(), err, asynq.SkipRetry)
 	}
 
 	tool, ok := utils.Find(h.Tools, func(tool executor.Tool) bool { return tool.Tag == p.Tag })
 	if !ok {
-		return respondError(t, fmt.Errorf("could not find tool: %s", p.Tag))
+		return respondError(t, fmt.Errorf("%s could not find tool: %s", t.ResultWriter().TaskID(), p.Tag))
 	}
 
-	log.Printf("found tool: %s %s", tool.Tag, tool.Executable)
-	log.Printf("files: ['%s']", strings.Join(utils.Map(p.Inputs, func(file File) string { return file.Path }), "', '"))
+	glog.Infof("%s: incomming request in queue '%s' for '%s' ['%s'] with %d packed files",
+		t.ResultWriter().TaskID(),
+		tool.Tag,
+		tool.Executable,
+		strings.Join(p.Command, "', '"),
+		len(p.Inputs))
+
+	glog.V(2).Infof("%s, files: ['%s']", t.ResultWriter().TaskID(), strings.Join(utils.Map(p.Inputs, func(file File) string { return file.Path }), "', '"))
 
 	randomDirectory, err := os.MkdirTemp("", "all-build-*")
-	log.Printf("created temporary directory: %s", randomDirectory)
+	glog.V(3).Infof("%s: created temporary directory: %s", t.ResultWriter().TaskID(), randomDirectory)
 	if err != nil {
-		return respondError(t, fmt.Errorf("could not create temporary directory: %v", err))
+		return respondError(t, fmt.Errorf("%s: could not create temporary directory: %v", t.ResultWriter().TaskID(), err))
 	}
+
+	compilerInstance := compiler.NewCompiler(p.Compiler)
+	if compilerInstance == nil {
+		return respondError(t, fmt.Errorf("%s: unknown compiler: %s", t.ResultWriter().TaskID(), p.Compiler))
+	}
+
+	compilerInstance.Parse(p.Command)
+
+	glog.V(3).Infof("%s: command before remapping: %v", t.ResultWriter().TaskID(), compiler.GetCommand(compilerInstance))
+	compilerInstance.Chroot(randomDirectory)
+	glog.V(3).Infof("%s: command after remapping: %v", t.ResultWriter().TaskID(), compiler.GetCommand(compilerInstance))
 
 	for _, file := range p.Inputs {
 		filePath := filepath.Join(randomDirectory, file.Path)
 
+		glog.V(3).Infof("%s: creating directory: %s", t.ResultWriter().TaskID(), filepath.Dir(filePath))
 		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return respondError(t, fmt.Errorf("could not create directory: %v", err))
+			return respondError(t, fmt.Errorf("%s: could not create directory: %v", t.ResultWriter().TaskID(), err))
 		}
 
+		glog.V(3).Infof("%s: writing file: %s", t.ResultWriter().TaskID(), filePath)
 		if err := os.WriteFile(filePath, file.Content, 0644); err != nil {
-			return respondError(t, fmt.Errorf("could not write file: %v", err))
+			return respondError(t, fmt.Errorf("%s: could not write file: %v", t.ResultWriter().TaskID(), err))
 		}
 
+		glog.V(3).Infof("%s: chmod file: %s", t.ResultWriter().TaskID(), filePath)
 		if err := os.Chmod(filePath, os.FileMode(file.Chmod)); err != nil {
-			return respondError(t, fmt.Errorf("could not chmod file: %v", err))
+			return respondError(t, fmt.Errorf("%s: could not chmod file: %v", t.ResultWriter().TaskID(), err))
 		}
 	}
 
 	// Create output directories
 	for _, output := range p.Outputs {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(randomDirectory, output)), 0755); err != nil {
-			return respondError(t, fmt.Errorf("could not create directory: %v", err))
+			return respondError(t, fmt.Errorf("%s: could not create directory: %v", t.ResultWriter().TaskID(), err))
 		}
 	}
 
-	// TODO: remap all files to the new path
-
-	log.Printf("running command: %s %s", tool.Executable, p.Command)
-	log.Printf("requested outputs: %v", p.Outputs)
-	cmd := exec.Command(tool.Executable, p.Command...)
+	glog.V(2).Infof("%s: running command: %s ['%s']", t.ResultWriter().TaskID(), tool.Executable, strings.Join(compiler.GetCommand(compilerInstance), "', '"))
+	glog.V(2).Infof("%s: requested outputs: %v", t.ResultWriter().TaskID(), p.Outputs)
+	cmd := exec.Command(tool.Executable, compiler.GetCommand(compilerInstance)...)
 	cmd.Dir = randomDirectory
 	//command.Env = append(os.Environ(), p.Environment...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return respondError(t, fmt.Errorf("could not get stderr pipe: %v", err))
+		return respondError(t, fmt.Errorf("%s: could not get stderr pipe: %v", t.ResultWriter().TaskID(), err))
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return respondError(t, fmt.Errorf("could not get stdout pipe: %v", err))
+		return respondError(t, fmt.Errorf("%s: could not get stdout pipe: %v", t.ResultWriter().TaskID(), err))
 	}
 
 	if err := cmd.Start(); err != nil {
-		return respondError(t, fmt.Errorf("could not start command: %v", err))
+		return respondError(t, fmt.Errorf("%s: could not start command: %v", t.ResultWriter().TaskID(), err))
 	}
 
 	errout, _ := io.ReadAll(stderr)
 	out, _ := io.ReadAll(stdout)
 
-	log.Printf("stderr: %s", errout)
-	log.Printf("stdout: %s", out)
+	glog.V(1).Infof("%s: stderr: %s", t.ResultWriter().TaskID(), errout)
+	glog.V(1).Infof("%s: stdout: %s", t.ResultWriter().TaskID(), out)
 
 	cmd.Wait()
+
+	fsContent := walkFilesystem(cmd.Dir)
+	glog.V(3).Infof("%s: filesystem content: ['%s']", t.ResultWriter().TaskID(), strings.Join(fsContent, "', '"))
 
 	outFiles := make([]File, 0)
 	for _, output := range p.Outputs {
 		content, err := os.ReadFile(filepath.Join(randomDirectory, output))
 		if err != nil {
-			log.Printf("could not read output file: %v", err)
+			glog.Warningf("%s: could not read output file: %v", t.ResultWriter().TaskID(), err)
 			continue
 		}
 
 		info, err := os.Stat(filepath.Join(randomDirectory, output))
 		if err != nil {
-			log.Printf("could not get file info: %v", err)
+			glog.Warningf("%s: could not get file info: %v", t.ResultWriter().TaskID(), err)
 			continue
 		}
 

@@ -1,7 +1,7 @@
 
 .PHONY: all generate build run
 
-all: generate build
+all: generate build test
 
 generate:
 	echo "Generating..."
@@ -14,6 +14,10 @@ build:
 	go vet ./...
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	staticcheck ./... || true
+
+test:
+	echo "Testing..."
+	go test -v ./...
 
 run-executor:
 	./bin/executor -v=3

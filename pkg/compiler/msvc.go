@@ -8,7 +8,7 @@ import (
 )
 
 type MSVC struct {
-	Compiler
+	ICompiler
 
 	inputs  []string
 	outputs []string
